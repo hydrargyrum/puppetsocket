@@ -1,6 +1,5 @@
 
 import asyncio
-import functools
 import sys
 
 
@@ -8,7 +7,7 @@ async def copyto(fromsock, tosock):
 	while True:
 		data = await fromsock.read(1024)
 		if not data:
-			tosock.write_eof()
+			tosock.close()
 			await tosock.wait_closed()
 			return
 
@@ -16,49 +15,58 @@ async def copyto(fromsock, tosock):
 		await tosock.drain()
 
 
-async def handle_connection(prot_reader, prot_writer, real_reader, real_writer, prot_server_l):
-	print("both connected")
-	prot_server_l[0].close()
-	await asyncio.gather(
-		copyto(prot_reader, real_writer),
-		copyto(real_reader, prot_writer),
-	)
-
-
-async def handle_real_client(reader, writer):
-	print("a real client connected")
-	prot_server_l = []
-	cb = functools.partial(
-		handle_connection,
-		real_reader=reader,
-		real_writer=writer,
-		prot_server_l=prot_server_l,
-	)
-	prot_server = await asyncio.start_server(
-		cb,
-		*PROT_ADDR,
-		reuse_port=True,
-	)
-	prot_server_l.append(prot_server)
-	async with prot_server:
-		await prot_server.serve_forever()
-
-
-async def main():
+async def fake_server():
 	fake_server = await asyncio.start_server(
 		handle_real_client,
 		*FAKE_ADDR,
-		reuse_port=True,
 	)
 
 	async with fake_server:
 		await fake_server.serve_forever()
 
 
-PROT_ADDR = sys.argv[1].split(":")
-PROT_ADDR[1] = int(PROT_ADDR[1])
+async def get_puppet_client():
+	# listen on puppet server, accept a single puppet client and stop listening
+
+	loop = asyncio.get_event_loop()
+
+	async def handle_client(reader, writer):
+		puppet_server.close()
+		await puppet_server.wait_closed()
+		rw.set_result((reader, writer))
+
+	rw = loop.create_future()
+
+	async with PUPPET_LOCK:
+		puppet_server = await asyncio.start_server(
+			handle_client,
+			*PUPPET_ADDR,
+		)
+		async with puppet_server:
+			return (await rw)
+
+
+async def handle_real_client(real_reader, real_writer):
+	loop = asyncio.get_event_loop()
+
+	print("a real client connected")
+
+	puppet_reader, puppet_writer = await get_puppet_client()
+	print("both connected")
+
+	loop.create_task(copyto(puppet_reader, real_writer))
+	loop.create_task(copyto(real_reader, puppet_writer))
+
+
+PUPPET_LOCK = asyncio.Lock()
+
+PUPPET_ADDR = sys.argv[1].split(":")
+PUPPET_ADDR[1] = int(PUPPET_ADDR[1])
 
 FAKE_ADDR = sys.argv[2].split(":")
 FAKE_ADDR[1] = int(FAKE_ADDR[1])
 
-asyncio.run(main())
+
+loop = asyncio.get_event_loop()
+loop.create_task(fake_server())
+loop.run_forever()
