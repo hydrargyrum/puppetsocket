@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import asyncio
 import sys
 
@@ -15,7 +17,7 @@ async def copyto(fromsock, tosock):
 
 async def connect_loop():
 	loop = asyncio.get_event_loop()
-	
+
 	while True:
 		# try to connect to puppet server
 		try:
